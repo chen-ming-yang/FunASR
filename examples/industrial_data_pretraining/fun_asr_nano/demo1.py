@@ -44,6 +44,16 @@ def main():
         vad_kwargs={"max_single_segment_time": 30000},
         remote_code="./model.py",
         device=device,
+        audio_adaptor="MOSAAdapter",
+        hub="ms",
+        audio_adaptor_conf={
+            "encoder_dim": 560,
+            "llm_dim": 1536
+            "adapter_dim": 4096,
+            "num_adapters": 4,
+            "variant": "base"
+            "downsample_rate": 2
+        }
     )
     res = model.generate(input=[wav_path], cache={}, batch_size=1)
     text = res[0]["text"]
