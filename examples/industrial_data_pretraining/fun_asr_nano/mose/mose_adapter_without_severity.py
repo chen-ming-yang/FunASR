@@ -3,7 +3,7 @@ import torch.nn as nn
 from funasr.register import tables
 
 
-class Adapter(nn.Moudule):
+class Adapter(nn.Module):
     def __init__(self, hidden_dim:int, adapter_dim: int):
         super().__init__()
         self.net = nn.Sequential(
@@ -12,7 +12,7 @@ class Adapter(nn.Moudule):
             nn.Linear(adapter_dim, hidden_dim)
         )
     
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
     
 
@@ -88,15 +88,14 @@ class ConvDownsampler(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.transpose(1, 2)
-        return self.net(x).transpose(1, 2)
+        return self.conv(x).transpose(1, 2)
     
 
-@tables.register("adapter_classes", "JointMOSAAdapter")
-class JsontMOSAAdapter(nn.Moudule):
+@tables.register("adaptor_classes", "JointMOSAAdapter")
+class JointMOSAAdapter(nn.Module):
     """
-    Simple design:
-        Training: GT severity score -> Router
-        Inference: Predicted severity score -> Router
+    Severity-guided Mixture-of-Adapters.
+    SeverityScorePredictor is pretrained & frozen; always runs inference.
     """
     def __init__(self, 
                  encoder_dim: int = 1280,
@@ -133,23 +132,21 @@ class JsontMOSAAdapter(nn.Moudule):
 
     def forward(self, 
                 encoder_out: torch.Tensor, 
-                encoder_out_lens: torch.Tensor = None,
-                severity_score: torch.Tensor = None):
-        # get routing score
-        if severity_score is not None:
-            router_score = severity_score.detach()
-        else:
-            router_score = self.severity_predictor(encoder_out.detach, encoder_out_lens).detach()
+                encoder_out_lens: torch.Tensor = None):
+        # severity predictor is pretrained & frozen, inference only
+        with torch.no_grad():
+            router_score = self.severity_predictor(encoder_out, encoder_out_lens)
         
         # MOSA forward
         w = self.router(encoder_out, router_score)
         h_conv = self.conv_downsampler(encoder_out)
 
         adapted_out_lens = encoder_out_lens
-        for _ in range(2):
-            adapted_out_lens = (adapted_out_lens 
-                                + 2 * self.conv_downsampler.padding 
-                                - self.conv_downsampler.kernel_size) // self.conv_downsampler.stride + 1
+        if adapted_out_lens is not None:
+            for _ in range(2):
+                adapted_out_lens = (adapted_out_lens 
+                                    + 2 * self.conv_downsampler.padding 
+                                    - self.conv_downsampler.kernel_size) // self.conv_downsampler.stride + 1
         
         # weighted sum of adapter outputs
         h_adapt = torch.zeros_like(h_conv)
@@ -159,6 +156,8 @@ class JsontMOSAAdapter(nn.Moudule):
         
         if self.output_proj is not None:
             h_adapt = self.output_proj(h_adapt)
+
+        return h_adapt, adapted_out_lens
 
 
     def compute_predictor_loss(self, encoder_out: torch.Tensor, encoder_out_lens: torch.Tensor, severity_score: torch.Tensor):

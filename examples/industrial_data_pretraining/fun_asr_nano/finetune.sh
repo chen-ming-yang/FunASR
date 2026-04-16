@@ -3,6 +3,10 @@
 
 workspace=`pwd`
 
+# Register JointMOSAAdapter before training starts
+export PYTHONPATH="${workspace}/mose:${PYTHONPATH}"
+python -c "import mose_adapter_without_severity; print('JointMOSAAdapter registered')"
+
 # which gpu to train or finetune
 export CUDA_VISIBLE_DEVICES="0"
 gpu_num=$(echo $CUDA_VISIBLE_DEVICES | awk -F "," '{print NF}')
@@ -10,9 +14,9 @@ gpu_num=$(echo $CUDA_VISIBLE_DEVICES | awk -F "," '{print NF}')
 # model_name from model_hub, or model_dir in local path
 model_name_or_model_dir="FunAudioLLM/Fun-ASR-Nano-2512"
 
-# data dir, which contains: train.json, val.json
-train_data=${workspace}/data/train_example.jsonl
-val_data=${workspace}/data/val_example.jsonl
+# data dir, which contains: train.jsonl, val.jsonl
+train_data=${workspace}/data/train.jsonl
+val_data=${workspace}/data/val.jsonl
 
 # exp output dir
 output_dir="./outputs"
@@ -59,7 +63,15 @@ ${train_tool} \
 ++train_conf.use_deepspeed=false \
 ++train_conf.deepspeed_config=${deepspeed_config} \
 ++optim_conf.lr=0.0002 \
+++audio_adaptor="JointMOSAAdapter" \
+++audio_adaptor_conf.adapter_dim=2048 \
+++audio_adaptor_conf.num_adapters=4 \
+++audio_adaptor_conf.router_hidden=256 \
+++audio_adaptor_conf.conv_kernel_size=3 \
+++audio_adaptor_conf.predictor_hidden=256 \
+++audio_adaptor_conf.predictor_dropout=0.2 \
+++audio_adaptor_conf.use_low_frame_rate=true \
 ++audio_encoder_conf.freeze=true \
-++audio_adaptor_conf.freeze=true \
-++llm_conf.freeze=false \
+++audio_adaptor_conf.freeze=false \
+++llm_conf.freeze=true \
 ++output_dir="${output_dir}" &> ${log_file}
