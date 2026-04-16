@@ -95,11 +95,13 @@ python tools/cdsd2jsonl.py \
 
 ---
 
-### Step 1: Generate Severity Scores (`generate_severity_score.py`)
+### Step 1: Generate Severity Scores (`mose/generate_severity_score.py`)
 
-Computes a continuous severity score (0–1) for each utterance using a reference ASR model (default: `whisper-large-v3`).
+Computes a continuous severity score (0–1) for each utterance by running an ASR model (default: `FunAudioLLM/Fun-ASR-Nano-2512`) and comparing its hypothesis against the ground truth.
 
-**Input:** JSONL file with `source` (audio path) and `target` (ground truth text).
+**Input:** JSONL file — supports both formats:
+- Simple: `{"source": "/path/to/audio.wav", "target": "text"}`
+- FunASR-Nano chat format from `cdsd2jsonl.py` (auto-parsed)
 
 **Score formula:**
 
@@ -116,17 +118,78 @@ severity = wer_weight × (1 - CER) + conf_weight × avg_confidence + wc_weight �
 **Usage:**
 
 ```bash
-python generate_severity_score.py \
-    --input data.jsonl \
-    --output data_scored.jsonl \
-    --model openai/whisper-large-v3
+python mose/generate_severity_score.py \
+    --input data/train.jsonl \
+    --output data/train_scored.jsonl
 ```
 
 **Output:** Original JSONL records augmented with `severity_score` and sub-component fields.
 
 ---
 
-### Step 2: Prepare Model with MOSA Adapter (`prepare_mosa.py`)
+### Step 1.5: Train the Severity Score Predictor (`mose/train_predictor.py`)
+
+Trains the `SeverityScorePredictor` to predict severity scores from encoder outputs, so that at adapter-training time (and inference) no external ASR model is needed.
+
+#### Training flow
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                  Predictor Pre-training                       │
+│                                                              │
+│  Audio ──► FunASR-Nano Encoder (frozen) ──► encoder_out      │
+│                                                │             │
+│                                                ▼             │
+│                                   SeverityScorePredictor     │
+│                                   (trainable)                │
+│                                                │             │
+│                                                ▼             │
+│                                         predicted_score      │
+│                                                │             │
+│  GT severity score (from Step 1) ──────────►  MSE Loss       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### What it does
+
+1. Loads the FunASR-Nano model and **freezes the encoder**.
+2. For every audio file in the scored JSONL, runs the encoder to extract `encoder_out` (one-time extraction, stored in memory).
+3. Creates a `SeverityScorePredictor` and trains it with:
+   - **Loss:** `MSE(predictor(encoder_out), gt_severity_score)`
+   - **Optimizer:** Adam
+   - **Scheduler:** CosineAnnealingLR
+4. Saves the best checkpoint (lowest loss) to `pretrained_predictor.pth`.
+
+#### Usage
+
+```bash
+python mose/train_predictor.py \
+    --data data/train_scored.jsonl \
+    --model_id FunAudioLLM/Fun-ASR-Nano-2512 \
+    --epochs 20 \
+    --batch_size 16 \
+    --lr 1e-3 \
+    --output pretrained_predictor.pth
+```
+
+| Argument              | Default                          | Description                              |
+|-----------------------|----------------------------------|------------------------------------------|
+| `--data`              | (required)                       | Scored JSONL from Step 1                 |
+| `--model_id`          | `FunAudioLLM/Fun-ASR-Nano-2512`  | FunASR model (encoder only)              |
+| `--epochs`            | 20                               | Training epochs                          |
+| `--batch_size`        | 16                               | Batch size                               |
+| `--lr`                | 1e-3                             | Learning rate                            |
+| `--predictor_hidden`  | 256                              | Hidden dim of predictor                  |
+| `--predictor_dropout` | 0.2                              | Dropout rate                             |
+| `--output`            | `pretrained_predictor.pth`       | Output weights path                      |
+
+#### Output
+
+`pretrained_predictor.pth` — state dict of the trained `SeverityScorePredictor`, to be loaded by `prepare_mosa.py` in the next step.
+
+---
+
+### Step 2: Prepare Model with MOSA Adapter (`mose/prepare_mosa.py`)
 
 Integrates the `JointMOSAAdapter` into a pretrained FunASR-Nano model and loads a pretrained severity predictor.
 
@@ -174,15 +237,17 @@ Contains all module definitions registered under `@tables.register("adapter_clas
 | Predictor gradients | Trainable (MSE loss vs GT scores)      | Frozen (no grad)                       | Frozen (no grad)                       |
 | Trainable params    | Predictor only                         | Router + Adapters + output_proj        | All frozen at deploy                   |
 
-#### Predictor Pre-training (separate stage)
+#### Predictor Pre-training
 
-The `SeverityScorePredictor` is trained **independently before** adapter training:
+See **Step 1.5** above for the full training pipeline. Summary:
 
-```python
-predictor_loss = MSE(SeverityScorePredictor(encoder_out), gt_severity_score)
 ```
-
-Once pretrained, its weights are loaded and **frozen for all subsequent stages**. During FunASR-Nano adapter training and final inference, the predictor runs in inference-only mode to supply severity scores to the router.
+Step 0:   cdsd2jsonl.py          →  data/train.jsonl (raw training data)
+Step 1:   generate_severity_score.py  →  data/train_scored.jsonl (+ GT severity scores)
+Step 1.5: train_predictor.py     →  pretrained_predictor.pth (trained predictor weights)
+Step 2:   prepare_mosa.py        →  load predictor into adapter, freeze it
+Step 3:   finetune.sh            →  train router + adapters + output_proj
+```
 
 ## Parameter Groups
 

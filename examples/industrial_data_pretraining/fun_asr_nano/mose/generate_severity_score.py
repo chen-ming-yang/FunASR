@@ -1,9 +1,10 @@
 import json
 import os
+import math
 import argparse
 from tqdm import tqdm
 
-from funasr import AutoModel
+import whisper
 
 
 def compute_wer(reference: str, hypothesis: str) -> float:
@@ -25,18 +26,26 @@ def compute_wer(reference: str, hypothesis: str) -> float:
     return dp[-1] / len(ref)
 
 class ContinuousSeverityLabeler:
-    def __init__(self, asr_model_id: str="openai/whisper-large-v3"):
-        self.model = AutoModel(model=asr_model_id, trust_remote_code=True)
+    def __init__(self, model_size: str = "large-v3"):
+        self.model = whisper.load_model(model_size)
     
     def compute_severity_score(self, 
                                audio_path: str,
                                ground_truth: str,
                                wer_weight: float = 0.4,
                                conf_weight: float = 0.3,
-                               wc_weight: float = 0.3) -> float:
+                               wc_weight: float = 0.3) -> dict:
 
-        result = self.model.generate(input=audio_path, return_raw_text=True)
-        hypothesis = result[0]["text"]
+        result = self.model.transcribe(audio_path, language="zh")
+        hypothesis = result["text"].strip()
+
+        # Extract avg_logprob from segments → convert to confidence
+        segments = result.get("segments", [])
+        if segments:
+            avg_logprob = sum(s["avg_logprob"] for s in segments) / len(segments)
+            avg_confidence = min(math.exp(avg_logprob), 1.0)
+        else:
+            avg_confidence = 0.5
 
 
         try:
@@ -48,12 +57,10 @@ class ContinuousSeverityLabeler:
         
         wer_error = 1.0 - utterence_wer
 
-        avg_confidence = result[0].get("avg_confidence", 0.5)
-
-        gt_words = ground_truth.split()
-        hyp_words = hypothesis.split()
-        if len(gt_words) > 0:
-            ratio = len(hyp_words) / len(gt_words)
+        gt_chars = list(ground_truth.replace(" ", ""))
+        hyp_chars = list(hypothesis.replace(" ", ""))
+        if len(gt_chars) > 0:
+            ratio = len(hyp_chars) / len(gt_chars)
             word_count_ratio = min(ratio, 1.0 / max(ratio, 1e-6))
             word_count_ratio = min(word_count_ratio, 1.0)
         else:
@@ -66,6 +73,7 @@ class ContinuousSeverityLabeler:
         )
         combined = max(0.0, min(combined, 1.0))
         return {
+            "hypothesis": hypothesis,
             "wer_error": wer_error,
             "avg_confidence": avg_confidence,
             "word_count_ratio": word_count_ratio,
@@ -76,24 +84,24 @@ class ContinuousSeverityLabeler:
 def generate_scores_for_dataset(
     input_jsonl: str,
     output_jsonl: str,
-    asr_model_id: str = "openai/whisper-large-v3",
+    model_size: str = "large-v3",
     wer_weight: float = 0.4,
     conf_weight: float = 0.3,
     wc_weight: float = 0.3,
 ) -> None:
     """Read a JSONL file, compute severity scores for each entry, and write results.
 
-    Input format (one JSON object per line)::
+    Supports two input formats:
 
-        {"key": "...", "source": "/path/to/audio.wav", "target": "text", "speaker": "..."}
+    1. Simple format (one JSON object per line)::
 
-    Output format adds score fields to every record::
+        {"key": "...", "source": "/path/to/audio.wav", "target": "text"}
 
-        {"key": "...", "source": "...", "target": "...", "speaker": "...",
-         "hypothesis": "...", "wer_error": 0.9, "avg_confidence": 0.8,
-         "word_count_ratio": 1.0, "combined_score": 0.87, "severity_score": 0.87}
+    2. FunASR-Nano chat format (from cdsd2jsonl.py)::
+
+        {"messages": [{"role": "user", "content": "...!<audio_path>..."}, {"role": "assistant", "content": "text"}], ...}
     """
-    labeler = ContinuousSeverityLabeler(asr_model_id=asr_model_id)
+    labeler = ContinuousSeverityLabeler(model_size=model_size)
 
     # Load all records
     records = []
@@ -107,9 +115,22 @@ def generate_scores_for_dataset(
 
     with open(output_jsonl, "w", encoding="utf-8") as out_f:
         for record in tqdm(records, desc="Scoring"):
+            # Parse audio_path and ground_truth from either format
+            if "source" in record:
+                audio_path = record["source"]
+                ground_truth = record.get("target", "")
+            elif "messages" in record:
+                # FunASR-Nano chat format: extract audio path from user message,
+                # transcript from assistant message
+                user_msg = next(m["content"] for m in record["messages"] if m["role"] == "user")
+                # Audio path is between "!" and "<|endofspeech|>"
+                audio_path = user_msg.split("!", 1)[1].split("<|endofspeech|>")[0]
+                ground_truth = next(m["content"] for m in record["messages"] if m["role"] == "assistant")
+            else:
+                print(f"[WARN] Unrecognized record format, skipping")
+                continue
+
             key = record.get("key", "")
-            audio_path = record["source"]
-            ground_truth = record.get("target", "")
 
             try:
                 scores = labeler.compute_severity_score(
@@ -119,9 +140,7 @@ def generate_scores_for_dataset(
                     conf_weight=conf_weight,
                     wc_weight=wc_weight,
                 )
-                # Also capture the ASR hypothesis for inspection
-                result = labeler.model.generate(input=audio_path, return_raw_text=True)
-                hypothesis = result[0]["text"]
+                hypothesis = scores.pop("hypothesis", "")
             except Exception as e:
                 print(f"[WARN] Failed for key={key}: {e}")
                 scores = {
@@ -147,7 +166,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate severity scores for an ASR dataset.")
     parser.add_argument("--input",  required=True, help="Path to input JSONL file")
     parser.add_argument("--output", required=True, help="Path to output JSONL file")
-    parser.add_argument("--model",  default="openai/whisper-large-v3", help="ASR model id")
+    parser.add_argument("--model",  default="large-v3", help="Whisper model size (tiny, base, small, medium, large-v3)")
     parser.add_argument("--wer_weight",  type=float, default=0.4)
     parser.add_argument("--conf_weight", type=float, default=0.3)
     parser.add_argument("--wc_weight",   type=float, default=0.3)
@@ -156,7 +175,7 @@ if __name__ == "__main__":
     generate_scores_for_dataset(
         input_jsonl=args.input,
         output_jsonl=args.output,
-        asr_model_id=args.model,
+        model_size=args.model,
         wer_weight=args.wer_weight,
         conf_weight=args.conf_weight,
         wc_weight=args.wc_weight,
