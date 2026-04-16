@@ -92,7 +92,7 @@ def main():
     parser.add_argument("--data_dir", required=True, help="Root of CDSD dataset (contains Audio/ and Text/)")
     parser.add_argument("--output_dir", required=True, help="Directory to write train.jsonl and val.jsonl")
     parser.add_argument("--val_ratio", type=float, default=0.05, help="Fraction of data for validation (default: 0.05)")
-    parser.add_argument("--prompt", default="语音转写：", help="Prompt prefix for the user message")
+    parser.add_argument("--prompt", default="语音转写，不要有幻觉,不进行文本规整：", help="Prompt prefix for the user message")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for train/val split")
     args = parser.parse_args()
 
