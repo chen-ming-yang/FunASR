@@ -3,8 +3,11 @@
 
 cd "$(dirname "$0")"
 
-python tools/cdsd2jsonl.py \
-    --data_dir "/cmy/after_catting/10h" \
-    --output_dir ./data \
-    --val_ratio 0.05 \
-    --prompt "语音转写，不进行文本规整："
+# Generate severity scores for train and val
+python mose/generate_severity_score.py \
+    --input  dysar_data/train.jsonl \
+    --output dysar_data/train_scored.jsonl
+
+python mose/generate_severity_score.py \
+    --input  dysar_data/val.jsonl \
+    --output dysar_data/val_scored.jsonl
