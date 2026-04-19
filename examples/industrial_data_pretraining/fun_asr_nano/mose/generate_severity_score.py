@@ -81,10 +81,56 @@ class ContinuousSeverityLabeler:
             "severity_score": round(combined, 4),
         }
 
+import multiprocessing as mp
+def init_worker(model_size: str):
+    """"""
+    global _labeler
+    _labeler = ContinuousSeverityLabeler(model_size=model_size)
+
+def process_record_worker(args):
+    record, wer_weight, conf_weight, wc_weight = args
+    if "source" in record:
+        audio_path = record["source"]
+        ground_truth = record.get("target", "")
+    elif "messages" in record:
+        user_msg = next(m["content"] for m in record["messages"] if m["role"] == "user")
+        audio_path = user_msg.split("!", 1)[1].split("<|endofspeech|>")[0]
+        ground_truth = next(m["content"] for m in record["messages"] if m["role"] == "assistant")
+    else:
+        return None
+
+    key = record.get("key", "")
+    try:
+        scores = _labeler.compute_severity_score(
+            audio_path=audio_path,
+            ground_truth=ground_truth,
+            wer_weight=wer_weight,
+            conf_weight=conf_weight,
+            wc_weight=wc_weight,
+        )
+        hypothesis = scores.pop("hypothesis", "")
+    except Exception as e:
+        # print(f"[WARN] Failed for key={key}: {e}")
+        scores = {
+            "wer_error": None,
+            "avg_confidence": None,
+            "word_count_ratio": None,
+            "combined_score": None,
+            "severity_score": None,
+        }
+        hypothesis = ""
+
+    return {
+        **record,
+        "hypothesis": hypothesis,
+        **scores,
+    }
+
 def generate_scores_for_dataset(
     input_jsonl: str,
     output_jsonl: str,
     model_size: str = "large-v3",
+    num_workers: int = 1,
     wer_weight: float = 0.4,
     conf_weight: float = 0.3,
     wc_weight: float = 0.3,
@@ -101,9 +147,6 @@ def generate_scores_for_dataset(
 
         {"messages": [{"role": "user", "content": "...!<audio_path>..."}, {"role": "assistant", "content": "text"}], ...}
     """
-    labeler = ContinuousSeverityLabeler(model_size=model_size)
-
-    # Load all records
     records = []
     with open(input_jsonl, "r", encoding="utf-8") as f:
         for line in f:
@@ -112,55 +155,29 @@ def generate_scores_for_dataset(
                 records.append(json.loads(line))
 
     os.makedirs(os.path.dirname(os.path.abspath(output_jsonl)), exist_ok=True)
-
-    with open(output_jsonl, "w", encoding="utf-8") as out_f:
-        for record in tqdm(records, desc="Scoring"):
-            # Parse audio_path and ground_truth from either format
-            if "source" in record:
-                audio_path = record["source"]
-                # Remap /cmy/ paths to actual Windows path
-                if audio_path.startswith("/cmy/"):
-                    audio_path = audio_path.replace("/cmy/", "D:/CDSD-Interspeech/", 1)
-                ground_truth = record.get("target", "")
-            elif "messages" in record:
-                # FunASR-Nano chat format: extract audio path from user message,
-                # transcript from assistant message
-                user_msg = next(m["content"] for m in record["messages"] if m["role"] == "user")
-                # Audio path is between "!" and "<|endofspeech|>"
-                audio_path = user_msg.split("!", 1)[1].split("<|endofspeech|>")[0]
-                ground_truth = next(m["content"] for m in record["messages"] if m["role"] == "assistant")
-            else:
-                print(f"[WARN] Unrecognized record format, skipping")
-                continue
-
-            key = record.get("key", "")
-
-            try:
-                scores = labeler.compute_severity_score(
-                    audio_path=audio_path,
-                    ground_truth=ground_truth,
-                    wer_weight=wer_weight,
-                    conf_weight=conf_weight,
-                    wc_weight=wc_weight,
-                )
-                hypothesis = scores.pop("hypothesis", "")
-            except Exception as e:
-                print(f"[WARN] Failed for key={key}: {e}")
-                scores = {
-                    "wer_error": None,
-                    "avg_confidence": None,
-                    "word_count_ratio": None,
-                    "combined_score": None,
-                    "severity_score": None,
-                }
-                hypothesis = ""
-
-            out_record = {
-                **record,
-                "hypothesis": hypothesis,
-                **scores,
-            }
-            out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
+    
+    if num_workers > 1:
+        # Multiprocessing
+        mp.set_start_method("spawn", force=True)
+        task_args = [(r, wer_weight, conf_weight, wc_weight) for r in records]
+        
+        with open(output_jsonl, "w", encoding="utf-8") as out_f:
+            with mp.Pool(num_workers, initializer=init_worker, initargs=(model_size,)) as pool:
+                for out_record in tqdm(pool.imap_unordered(process_record_worker, task_args), total=len(records), desc="Scoring"):
+                    if out_record is not None:
+                        out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
+    else:
+        # Sequential
+        labeler = ContinuousSeverityLabeler(model_size=model_size)
+        with open(output_jsonl, "w", encoding="utf-8") as out_f:
+            for record in tqdm(records, desc="Scoring"):
+                out_record = process_record_worker((record, wer_weight, conf_weight, wc_weight))
+                # Patch for local sequential logic:
+                global _labeler
+                _labeler = labeler
+                out_record = process_record_worker((record, wer_weight, conf_weight, wc_weight))
+                if out_record is not None:
+                    out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
 
     print(f"Done. {len(records)} records written to {output_jsonl}")
 
@@ -170,6 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--input",  required=True, help="Path to input JSONL file")
     parser.add_argument("--output", required=True, help="Path to output JSONL file")
     parser.add_argument("--model",  default="small", help="Whisper model size (tiny, base, small, medium, large-v3)")
+    parser.add_argument("--num_workers", type=int, default=1, help="Number of parallel workers")
     parser.add_argument("--wer_weight",  type=float, default=0.4)
     parser.add_argument("--conf_weight", type=float, default=0.3)
     parser.add_argument("--wc_weight",   type=float, default=0.3)
@@ -179,6 +197,7 @@ if __name__ == "__main__":
         input_jsonl=args.input,
         output_jsonl=args.output,
         model_size=args.model,
+        num_workers=args.num_workers,
         wer_weight=args.wer_weight,
         conf_weight=args.conf_weight,
         wc_weight=args.wc_weight,
