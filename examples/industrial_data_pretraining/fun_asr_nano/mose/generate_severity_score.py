@@ -26,8 +26,8 @@ def compute_wer(reference: str, hypothesis: str) -> float:
     return dp[-1] / len(ref)
 
 class ContinuousSeverityLabeler:
-    def __init__(self, asr_model_id: str="openai/whisper-large-v3"):
-        self.model = AutoModel(model=asr_model_id, trust_remote_code=True)
+    def __init__(self, model_size: str = "small"):
+        self.model = whisper.load_model(model_size)
     
     def compute_severity_score(self, 
                                audio_path: str,
@@ -118,6 +118,9 @@ def generate_scores_for_dataset(
             # Parse audio_path and ground_truth from either format
             if "source" in record:
                 audio_path = record["source"]
+                # Remap /cmy/ paths to actual Windows path
+                if audio_path.startswith("/cmy/"):
+                    audio_path = audio_path.replace("/cmy/", "D:/CDSD-Interspeech/", 1)
                 ground_truth = record.get("target", "")
             elif "messages" in record:
                 # FunASR-Nano chat format: extract audio path from user message,
@@ -166,7 +169,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate severity scores for an ASR dataset.")
     parser.add_argument("--input",  required=True, help="Path to input JSONL file")
     parser.add_argument("--output", required=True, help="Path to output JSONL file")
-    parser.add_argument("--model",  default="large-v3", help="Whisper model size (tiny, base, small, medium, large-v3)")
+    parser.add_argument("--model",  default="small", help="Whisper model size (tiny, base, small, medium, large-v3)")
     parser.add_argument("--wer_weight",  type=float, default=0.4)
     parser.add_argument("--conf_weight", type=float, default=0.3)
     parser.add_argument("--wc_weight",   type=float, default=0.3)
