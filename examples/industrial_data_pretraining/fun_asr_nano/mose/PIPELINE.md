@@ -117,8 +117,8 @@ severity = wer_weight × (1 - CER) + conf_weight × avg_confidence + wc_weight �
 
 ```bash
 python generate_severity_score.py \
-    --input data.jsonl \
-    --output data_scored.jsonl \
+    --input /cmy/cmy/FunASR/examples/industrial_data_pretraining/fun_asr_nano/data/train.jsonl \
+    --output train_scored.jsonl \
     --model openai/whisper-large-v3
 ```
 
