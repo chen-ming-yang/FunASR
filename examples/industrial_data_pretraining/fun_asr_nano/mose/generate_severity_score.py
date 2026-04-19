@@ -26,8 +26,8 @@ def compute_wer(reference: str, hypothesis: str) -> float:
     return dp[-1] / len(ref)
 
 class ContinuousSeverityLabeler:
-    def __init__(self, model_size: str = "large-v3"):
-        self.model = whisper.load_model(model_size)
+    def __init__(self, asr_model_id: str="openai/whisper-large-v3"):
+        self.model = AutoModel(model=asr_model_id, trust_remote_code=True)
     
     def compute_severity_score(self, 
                                audio_path: str,
