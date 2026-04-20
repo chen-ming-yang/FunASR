@@ -41,6 +41,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from funasr import AutoModel
+from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 from mose_adapter_with_severity import SeverityScorePredictor
 
 
@@ -309,8 +310,8 @@ def train(args):
         dropout=args.predictor_dropout,
     ).to(device)
 
-    optimizer = torch.optim.Adam(predictor.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    optimizer = torch.optim.AdamW(predictor.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=args.lr * 0.01)
     criterion = nn.MSELoss()
 
     # Training loop
@@ -391,7 +392,8 @@ if __name__ == "__main__":
     parser.add_argument("--model_id", default="FunAudioLLM/Fun-ASR-Nano-2512", help="FunASR model for encoder")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=5e-4)
+    parser.add_argument("--weight_decay", type=float, default=5e-5, help="Weight decay for Adam optimizer")
     parser.add_argument("--extract_batch_size", type=int, default=8, help="Batch size for encoder feature extraction")
     parser.add_argument("--predictor_hidden", type=int, default=256)
     parser.add_argument("--predictor_dropout", type=float, default=0.2)
