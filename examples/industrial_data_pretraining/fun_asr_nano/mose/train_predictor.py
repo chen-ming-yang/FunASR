@@ -13,6 +13,7 @@ Input: JSONL from generate_severity_score.py with fields:
 Usage:
     python train_predictor.py \
         --data scored_data.jsonl \
+        --val_data val_scored.jsonl \
         --model_id FunAudioLLM/Fun-ASR-Nano-2512 \
         --epochs 20 \
         --batch_size 16 \
@@ -252,7 +253,7 @@ def train(args):
     )
 
     # Extract encoder outputs (frozen)
-    print("Extracting encoder outputs...")
+    print("Extracting encoder outputs (train)...")
     encoder_outs, encoder_lens, severity_scores = extract_with_encoder(
         model, records, device, extract_batch_size=args.extract_batch_size
     )
@@ -260,6 +261,33 @@ def train(args):
     if len(severity_scores) == 0:
         print("No valid samples found. Check your data.")
         return
+
+    # Load and extract validation data
+    val_records = []
+    with open(args.val_data, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                val_records.append(json.loads(line))
+    print(f"Loaded {len(val_records)} validation records from {args.val_data}")
+
+    print("Extracting encoder outputs (val)...")
+    val_encoder_outs, val_encoder_lens, val_severity_scores = extract_with_encoder(
+        model, val_records, device, extract_batch_size=args.extract_batch_size
+    )
+
+    if len(val_severity_scores) == 0:
+        print("No valid validation samples found. Validation will be skipped.")
+        val_dataloader = None
+    else:
+        val_dataset = SeverityDataset(val_encoder_outs, val_encoder_lens, val_severity_scores)
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=0,
+        )
 
     # Create dataset and dataloader
     dataset = SeverityDataset(encoder_outs, encoder_lens, severity_scores)
@@ -313,20 +341,43 @@ def train(args):
         scheduler.step()
         avg_loss = total_loss / num_batches
         lr = optimizer.param_groups[0]["lr"]
-        print(f"  Epoch {epoch:3d}/{args.epochs} | loss: {avg_loss:.6f} | lr: {lr:.2e}")
 
-        if len(best_checkpoints) < 5 or avg_loss < best_checkpoints[-1]["loss"]:
+        # Validation
+        val_loss_str = "N/A"
+        if val_dataloader is not None:
+            predictor.eval()
+            val_total_loss = 0.0
+            val_num_batches = 0
+            with torch.no_grad():
+                for enc_out, enc_lens, gt_scores in val_dataloader:
+                    enc_out = enc_out.to(device)
+                    enc_lens = enc_lens.to(device)
+                    gt_scores = gt_scores.to(device)
+                    pred_scores = predictor(enc_out, enc_lens)
+                    loss = criterion(pred_scores, gt_scores)
+                    val_total_loss += loss.item()
+                    val_num_batches += 1
+            avg_val_loss = val_total_loss / val_num_batches
+            val_loss_str = f"{avg_val_loss:.6f}"
+        else:
+            avg_val_loss = avg_loss  # fallback to train loss if no val data
+
+        print(f"  Epoch {epoch:3d}/{args.epochs} | train_loss: {avg_loss:.6f} | val_loss: {val_loss_str} | lr: {lr:.2e}")
+
+        # Use val loss for checkpoint selection
+        ckpt_loss = avg_val_loss
+        if len(best_checkpoints) < 5 or ckpt_loss < best_checkpoints[-1]["loss"]:
             best_loss = update_top_checkpoints(
                 best_checkpoints,
                 predictor,
                 epoch,
-                avg_loss,
+                ckpt_loss,
                 args.output,
                 keep_top_k=5,
             )
-            print(f"    Saved top-5 checkpoint set. Current best loss: {best_loss:.6f}")
+            print(f"    Saved top-5 checkpoint set. Current best val_loss: {best_loss:.6f}")
 
-    print(f"\nBest loss: {best_loss:.6f}")
+    print(f"\nBest val_loss: {best_loss:.6f}")
     print(f"Saved best predictor to {args.output}")
     print("Saved top checkpoints:")
     for checkpoint in best_checkpoints:
@@ -336,6 +387,7 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the SeverityScorePredictor.")
     parser.add_argument("--data", required=True, help="Scored JSONL from generate_severity_score.py")
+    parser.add_argument("--val_data", default="/cmy/cmy/FunASR/examples/industrial_data_pretraining/fun_asr_nano/dysar_data/val_scored.jsonl", help="Validation JSONL")
     parser.add_argument("--model_id", default="FunAudioLLM/Fun-ASR-Nano-2512", help="FunASR model for encoder")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=16)
