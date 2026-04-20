@@ -207,7 +207,7 @@ Integrates the `JointMOSAAdapter` into a pretrained FunASR-Nano model and loads 
 
 ---
 
-### Step 3: Core Adapter Module (`mose_adapter_without_severity.py`)
+### Step 3: Core Adapter Module (`mose_adapter_with_severity.py`)
 
 Contains all module definitions registered under `@tables.register("adapter_classes", "JointMOSAAdapter")`.
 

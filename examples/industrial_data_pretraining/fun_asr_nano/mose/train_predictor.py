@@ -40,8 +40,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from funasr import AutoModel
-from funasr.utils.load_utils import extract_fbank, load_audio_text_image_video
-from mose_adapter_without_severity import SeverityScorePredictor
+from mose_adapter_with_severity import SeverityScorePredictor
 
 
 class SeverityDataset(Dataset):

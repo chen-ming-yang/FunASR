@@ -5,7 +5,7 @@ workspace=`pwd`
 
 # Register JointMOSAAdapter before training starts
 export PYTHONPATH="${workspace}/mose:${PYTHONPATH}"
-python -c "import mose_adapter_without_severity; print('JointMOSAAdapter registered')"
+python -c "import mose_adapter_with_severity; print('JointMOSAAdapter registered')"
 
 # which gpu to train or finetune
 export CUDA_VISIBLE_DEVICES="0"
