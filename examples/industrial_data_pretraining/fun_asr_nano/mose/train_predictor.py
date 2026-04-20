@@ -5,7 +5,7 @@ Flow:
     1. Load FunASR-Nano encoder (frozen).
     2. For each audio, extract encoder_out.
     3. Train predictor: MSE(predictor(encoder_out), gt_severity_score).
-    4. Save pretrained_predictor.pth.
+    4. Save the best model to pretrained_predictor.pth and keep the best 5 checkpoints.
 
 Input: JSONL from generate_severity_score.py with fields:
     {"source": "/path/to/audio.wav", "severity_score": 0.87, ...}
@@ -16,19 +16,31 @@ Usage:
         --model_id FunAudioLLM/Fun-ASR-Nano-2512 \
         --epochs 20 \
         --batch_size 16 \
+        --extract_batch_size 8 \
         --lr 1e-3 \
         --output pretrained_predictor.pth
+
+This writes the current best model to --output and keeps the best five checkpoints
+alongside it as files like pretrained_predictor.epoch003.loss0.123456.pth.
 """
 
 import argparse
 import json
 import os
+import shutil
+import sys
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from funasr import AutoModel
+from funasr.utils.load_utils import extract_fbank, load_audio_text_image_video
 from mose_adapter_without_severity import SeverityScorePredictor
 
 
@@ -100,54 +112,122 @@ def extract_encoder_outputs(model, records, device):
     return encoder_outs, encoder_lens, severity_scores
 
 
-def extract_with_encoder(model, records, device):
-    """Extract encoder outputs by calling the encoder directly."""
-    import soundfile as sf
+def extract_with_encoder(model, records, device, extract_batch_size=8):
+    """Extract encoder outputs using the model's normal frontend + encode path."""
+    frontend = model.kwargs.get("frontend")
+    if frontend is None:
+        raise RuntimeError("AutoModel frontend is required to extract encoder features.")
 
-    encoder = model.model.audio_encoder if hasattr(model.model, 'audio_encoder') else model.model.encoder
-    frontend = model.model.frontend if hasattr(model.model, 'frontend') else None
-    encoder.eval()
+    if hasattr(model.model, "eval"):
+        model.model.eval()
 
     encoder_outs = []
     encoder_lens = []
     severity_scores = []
     skipped = 0
 
-    for i, rec in enumerate(records):
+    def process_single_record(rec):
         audio_path = rec["source"]
         score = rec.get("severity_score")
         if score is None:
-            skipped += 1
-            continue
+            return False
 
         try:
-            audio, sr = sf.read(audio_path, dtype="float32")
-            speech = torch.from_numpy(audio).unsqueeze(0).to(device)
-            speech_lengths = torch.tensor([speech.shape[1]], dtype=torch.long, device=device)
-
-            # Apply frontend (e.g. fbank) if available
-            if frontend is not None:
-                feats, feats_len = frontend(speech, speech_lengths)
-            else:
-                feats, feats_len = speech, speech_lengths
+            audio = load_audio_text_image_video(audio_path, fs=frontend.fs)
+            feats, feats_len = extract_fbank(audio, data_type="sound", frontend=frontend)
+            feats = feats.to(device)
+            feats_len = feats_len.to(device)
 
             with torch.no_grad():
-                enc_out, enc_out_lens = encoder(feats, feats_len)
+                enc_out_res = model.model.encode(feats, feats_len)
+                enc_out, enc_out_lens = enc_out_res[0], enc_out_res[1]
 
             encoder_outs.append(enc_out.squeeze(0).cpu())
             encoder_lens.append(enc_out_lens.item())
             severity_scores.append(float(score))
+            return True
 
         except Exception as e:
             print(f"[WARN] Skipping {audio_path}: {e}")
-            skipped += 1
-            continue
+            return False
 
-        if (i + 1) % 200 == 0:
-            print(f"  Extracted {i + 1}/{len(records)} ({skipped} skipped)")
+    def process_batch(batch_records):
+        audio_paths = [rec["source"] for rec in batch_records]
+        batch_scores = [float(rec["severity_score"]) for rec in batch_records]
+        audios = load_audio_text_image_video(audio_paths, fs=frontend.fs)
+        feats, feats_len = extract_fbank(audios, data_type="sound", frontend=frontend)
+        feats = feats.to(device)
+        feats_len = feats_len.to(device)
+
+        with torch.no_grad():
+            enc_out_res = model.model.encode(feats, feats_len)
+            enc_out, enc_out_lens = enc_out_res[0], enc_out_res[1]
+
+        enc_out = enc_out.cpu()
+        enc_out_lens = enc_out_lens.cpu()
+        for idx, score in enumerate(batch_scores):
+            enc_len = int(enc_out_lens[idx])
+            encoder_outs.append(enc_out[idx, :enc_len].clone())
+            encoder_lens.append(enc_len)
+            severity_scores.append(score)
+
+    batch_records = []
+    processed = 0
+
+    for rec in records:
+        processed += 1
+        if rec.get("severity_score") is None:
+            skipped += 1
+        else:
+            batch_records.append(rec)
+
+        if len(batch_records) == extract_batch_size:
+            try:
+                process_batch(batch_records)
+            except Exception as e:
+                print(f"[WARN] Batch extraction failed, falling back to per-file mode: {e}")
+                for batch_rec in batch_records:
+                    if not process_single_record(batch_rec):
+                        skipped += 1
+            batch_records = []
+
+        if processed % 200 == 0:
+            print(f"  Extracted {processed}/{len(records)} ({skipped} skipped)")
+
+    if batch_records:
+        try:
+            process_batch(batch_records)
+        except Exception as e:
+            print(f"[WARN] Batch extraction failed, falling back to per-file mode: {e}")
+            for batch_rec in batch_records:
+                if not process_single_record(batch_rec):
+                    skipped += 1
 
     print(f"Extraction done: {len(severity_scores)} samples, {skipped} skipped")
     return encoder_outs, encoder_lens, severity_scores
+
+
+def update_top_checkpoints(checkpoints, predictor, epoch, avg_loss, output_path, keep_top_k=5):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    checkpoint_name = (
+        f"{output_path.stem}.epoch{epoch:03d}.loss{avg_loss:.6f}{output_path.suffix or '.pth'}"
+    )
+    checkpoint_path = output_path.with_name(checkpoint_name)
+    torch.save(predictor.state_dict(), checkpoint_path)
+
+    checkpoints.append({"loss": avg_loss, "epoch": epoch, "path": checkpoint_path})
+    checkpoints.sort(key=lambda item: (item["loss"], item["epoch"]))
+
+    while len(checkpoints) > keep_top_k:
+        removed = checkpoints.pop()
+        if removed["path"].exists():
+            removed["path"].unlink()
+
+    best_checkpoint = checkpoints[0]
+    shutil.copy2(best_checkpoint["path"], output_path)
+    return best_checkpoint["loss"]
 
 
 def train(args):
@@ -165,12 +245,17 @@ def train(args):
 
     # Load FunASR model (encoder only needed)
     print(f"Loading model: {args.model_id}")
-    model = AutoModel(model=args.model_id, trust_remote_code=True, device=str(device))
+    model = AutoModel(
+        model=args.model_id,
+        trust_remote_code=True,
+        device=str(device),
+        disable_update=True,
+    )
 
     # Extract encoder outputs (frozen)
     print("Extracting encoder outputs...")
     encoder_outs, encoder_lens, severity_scores = extract_with_encoder(
-        model, records, device
+        model, records, device, extract_batch_size=args.extract_batch_size
     )
 
     if len(severity_scores) == 0:
@@ -204,6 +289,7 @@ def train(args):
     # Training loop
     print(f"\nTraining predictor for {args.epochs} epochs...")
     best_loss = float("inf")
+    best_checkpoints = []
 
     for epoch in range(1, args.epochs + 1):
         predictor.train()
@@ -230,12 +316,22 @@ def train(args):
         lr = optimizer.param_groups[0]["lr"]
         print(f"  Epoch {epoch:3d}/{args.epochs} | loss: {avg_loss:.6f} | lr: {lr:.2e}")
 
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save(predictor.state_dict(), args.output)
+        if len(best_checkpoints) < 5 or avg_loss < best_checkpoints[-1]["loss"]:
+            best_loss = update_top_checkpoints(
+                best_checkpoints,
+                predictor,
+                epoch,
+                avg_loss,
+                args.output,
+                keep_top_k=5,
+            )
+            print(f"    Saved top-5 checkpoint set. Current best loss: {best_loss:.6f}")
 
     print(f"\nBest loss: {best_loss:.6f}")
-    print(f"Saved predictor to {args.output}")
+    print(f"Saved best predictor to {args.output}")
+    print("Saved top checkpoints:")
+    for checkpoint in best_checkpoints:
+        print(f"  epoch {checkpoint['epoch']:3d} | loss: {checkpoint['loss']:.6f} | path: {checkpoint['path']}")
 
 
 if __name__ == "__main__":
@@ -245,9 +341,14 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--extract_batch_size", type=int, default=8, help="Batch size for encoder feature extraction")
     parser.add_argument("--predictor_hidden", type=int, default=256)
     parser.add_argument("--predictor_dropout", type=float, default=0.2)
-    parser.add_argument("--output", default="pretrained_predictor.pth", help="Output path for predictor weights")
+    parser.add_argument(
+        "--output",
+        default="pretrained_predictor.pth",
+        help="Output path for the best predictor weights; top-5 checkpoints are saved alongside it",
+    )
     args = parser.parse_args()
 
     train(args)
