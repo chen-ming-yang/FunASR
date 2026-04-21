@@ -70,6 +70,7 @@ ${train_tool} \
 ++audio_adaptor_conf.conv_kernel_size=3 \
 ++audio_adaptor_conf.predictor_hidden=256 \
 ++audio_adaptor_conf.predictor_dropout=0.2 \
+++audio_adaptor_conf.pretrained_predictor_path="${workspace}/mose/pretrained_predictor.pth" \
 ++audio_adaptor_conf.use_low_frame_rate=true \
 ++audio_encoder_conf.freeze=true \
 ++audio_adaptor_conf.freeze=false \
