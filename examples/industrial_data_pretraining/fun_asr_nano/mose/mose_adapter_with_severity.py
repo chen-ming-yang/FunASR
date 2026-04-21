@@ -106,6 +106,7 @@ class JointMOSAAdapter(nn.Module):
                  conv_kernel_size: int = 3,
                  predictor_hidden: int = 256,
                  predictor_dropout: float = 0.2,
+                 pretrained_predictor_path: str = None,
                  freeze: bool = False,
                  use_low_frame_rate: bool = True,
                  **kwargs):
@@ -113,6 +114,16 @@ class JointMOSAAdapter(nn.Module):
         self.num_adatpers = num_adapters
         
         self.severity_predictor = SeverityScorePredictor(input_dim=encoder_dim, hidden_dim=predictor_hidden, dropout=predictor_dropout)
+
+        # Load pretrained predictor weights and freeze
+        if pretrained_predictor_path is not None:
+            state_dict = torch.load(pretrained_predictor_path, map_location="cpu")
+            self.severity_predictor.load_state_dict(state_dict)
+            print(f"[JointMOSAAdapter] Loaded pretrained predictor from {pretrained_predictor_path}")
+        for param in self.severity_predictor.parameters():
+            param.requires_grad = False
+        self.severity_predictor.eval()
+        print("[JointMOSAAdapter] Severity predictor frozen.")
 
         self.router = ContinousScoreRouter(encoder_dim=encoder_dim, 
                                            score_proj_dim=64, 

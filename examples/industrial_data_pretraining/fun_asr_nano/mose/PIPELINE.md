@@ -154,35 +154,47 @@ Trains the `SeverityScorePredictor` to predict severity scores from encoder outp
 #### What it does
 
 1. Loads the FunASR-Nano model and **freezes the encoder**.
-2. For every audio file in the scored JSONL, runs the encoder to extract `encoder_out` (one-time extraction, stored in memory).
+2. For every audio file in the scored JSONL (train + val), runs the encoder to extract `encoder_out` (one-time extraction, stored in memory).
 3. Creates a `SeverityScorePredictor` and trains it with:
    - **Loss:** `MSE(predictor(encoder_out), gt_severity_score)`
-   - **Optimizer:** Adam
-   - **Scheduler:** CosineAnnealingLR
-4. Saves the best checkpoint (lowest loss) to `pretrained_predictor.pth`.
+   - **Optimizer:** AdamW (with weight decay)
+   - **Scheduler:** CosineAnnealingLR (decays to 1% of initial LR)
+4. Evaluates on validation set after each epoch; uses **val loss** for checkpoint selection.
+5. Saves the best checkpoint (lowest val loss) to `pretrained_predictor.pth`.
 
 #### Usage
 
 ```bash
 python mose/train_predictor.py \
     --data data/train_scored.jsonl \
+    --val_data data/val_scored.jsonl \
     --model_id FunAudioLLM/Fun-ASR-Nano-2512 \
     --epochs 20 \
     --batch_size 16 \
     --lr 1e-3 \
+    --weight_decay 1e-4 \
     --output pretrained_predictor.pth
 ```
 
 | Argument              | Default                          | Description                              |
 |-----------------------|----------------------------------|------------------------------------------|
 | `--data`              | (required)                       | Scored JSONL from Step 1                 |
+| `--val_data`          | `val_scored.jsonl`               | Validation JSONL for checkpoint selection|
 | `--model_id`          | `FunAudioLLM/Fun-ASR-Nano-2512`  | FunASR model (encoder only)              |
 | `--epochs`            | 20                               | Training epochs                          |
 | `--batch_size`        | 16                               | Batch size                               |
 | `--lr`                | 1e-3                             | Learning rate                            |
+| `--weight_decay`      | 1e-4                             | Weight decay for AdamW optimizer         |
 | `--predictor_hidden`  | 256                              | Hidden dim of predictor                  |
 | `--predictor_dropout` | 0.2                              | Dropout rate                             |
 | `--output`            | `pretrained_predictor.pth`       | Output weights path                      |
+
+#### Training details
+
+- **Optimizer:** AdamW with decoupled weight decay
+- **Scheduler:** CosineAnnealingLR (decays to 1% of initial LR)
+- **Validation:** Runs after each epoch; checkpoints selected by **val loss**
+- **Checkpointing:** Keeps top-5 checkpoints by val loss; best is copied to `--output`
 
 #### Output
 
