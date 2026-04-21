@@ -1,0 +1,14 @@
+python examples/industrial_data_pretraining/fun_asr_nano/mose/train_predictor.py \
+	--data examples/industrial_data_pretraining/fun_asr_nano/dysar_data/train_scored.jsonl \
+    --val_data examples/industrial_data_pretraining/fun_asr_nano/dysar_data/val_scored.jsonl \
+	--model_id FunAudioLLM/Fun-ASR-Nano-2512 \
+	--epochs 40 \
+	--batch_size 16 \
+	--lr 1e-4 \
+	--output examples/industrial_data_pretraining/fun_asr_nano/pretrained_predictor.pth
+
+
+python /cmy/cmy/FunASR/examples/industrial_data_pretraining/fun_asr_nano/mose/infer_predictor.py \
+    --data /cmy/cmy/FunASR/examples/industrial_data_pretraining/fun_asr_nano/dysar_data/test_scored.jsonl \
+    --model_path /cmy/cmy/FunASR/examples/industrial_data_pretraining/fun_asr_nano/pretrained_predictor.epoch002.loss0.020973.pth \
+    --output test_predictions.jsonl
