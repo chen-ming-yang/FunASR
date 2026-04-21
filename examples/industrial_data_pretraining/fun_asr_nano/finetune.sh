@@ -3,9 +3,9 @@
 
 workspace=`pwd`
 
-# Register JointMOSAAdapter before training starts
+# Register JointMOSAAdapter: model.py imports mose_adapter_with_severity automatically
+# PYTHONPATH must include the mose/ directory so the import resolves inside torchrun
 export PYTHONPATH="${workspace}/mose:${PYTHONPATH}"
-python -c "import mose_adapter_with_severity; print('JointMOSAAdapter registered')"
 
 # which gpu to train or finetune
 export CUDA_VISIBLE_DEVICES="0"
@@ -70,7 +70,7 @@ ${train_tool} \
 ++audio_adaptor_conf.conv_kernel_size=3 \
 ++audio_adaptor_conf.predictor_hidden=256 \
 ++audio_adaptor_conf.predictor_dropout=0.2 \
-++audio_adaptor_conf.pretrained_predictor_path="${workspace}/mose/pretrained_predictor.pth" \
+++audio_adaptor_conf.pretrained_predictor_path="${workspace}/mose/pretrained_predictor.epoch004.loss0.020966.pth" \
 ++audio_adaptor_conf.use_low_frame_rate=true \
 ++audio_encoder_conf.freeze=true \
 ++audio_adaptor_conf.freeze=false \

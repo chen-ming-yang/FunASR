@@ -20,6 +20,12 @@ from funasr.utils.load_utils import extract_fbank, load_audio_text_image_video
 from ctc import CTC
 from tools.utils import forced_align
 
+# Register JointMOSAAdapter into adaptor_classes table
+try:
+    import mose_adapter_with_severity  # noqa: F401  – side-effect: registers JointMOSAAdapter
+except ImportError:
+    pass
+
 dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
 
 
