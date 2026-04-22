@@ -48,7 +48,7 @@ ${train_tool} \
 ++valid_data_set_list="${val_data}" \
 ++dataset_conf.data_split_num=1 \
 ++dataset_conf.batch_sampler="BatchSampler" \
-++dataset_conf.batch_size=6000  \
+++dataset_conf.batch_size=12000  \
 ++dataset_conf.sort_size=1024 \
 ++dataset_conf.batch_type="token" \
 ++dataset_conf.num_workers=4 \
@@ -70,7 +70,7 @@ ${train_tool} \
 ++audio_adaptor_conf.conv_kernel_size=3 \
 ++audio_adaptor_conf.predictor_hidden=256 \
 ++audio_adaptor_conf.predictor_dropout=0.2 \
-++audio_adaptor_conf.pretrained_predictor_path="${workspace}/mose/pretrained_predictor.epoch004.loss0.020966.pth" \
+++audio_adaptor_conf.pretrained_predictor_path="/cmy/cmy/FunASR/examples/industrial_data_pretraining/fun_asr_nano/pretrained_predictor.epoch004.loss0.020966.pth" \
 ++audio_adaptor_conf.use_low_frame_rate=true \
 ++audio_encoder_conf.freeze=true \
 ++audio_adaptor_conf.freeze=false \
