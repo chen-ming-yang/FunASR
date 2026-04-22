@@ -9,11 +9,14 @@ export PYTHONPATH="${workspace}/mose:${PYTHONPATH}"
 
 export CUDA_VISIBLE_DEVICES="0"
 
-# ── Point this to your finetuned checkpoint directory ──────────────────────────
+# ── Choose model ───────────────────────────────────────────────────────────────
+# Option A: original FunASR-Nano from hub (no finetuning)
+# model_dir="FunAudioLLM/Fun-ASR-Nano-2512"
+
+# Option B: your finetuned checkpoint (uncomment to use)
 # After training, FunASR saves checkpoints like:
 #   outputs/model.pt         (best averaged model)
-#   outputs/1epoch.pt
-#   outputs/2epoch.pt  ...
+#   outputs/1epoch.pt  ...
 # Set model_dir to the outputs/ folder; AutoModel will load model.pt from it.
 model_dir="${workspace}/outputs"
 
@@ -37,4 +40,4 @@ python -m funasr.bin.inference \
 ++batch_size=1 \
 ++batch_size_s=300 \
 ++hotwords="" \
-++language="中文"
+"++language=中文"
