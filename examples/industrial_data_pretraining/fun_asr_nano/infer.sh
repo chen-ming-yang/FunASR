@@ -40,4 +40,4 @@ python -m funasr.bin.inference \
 ++batch_size=1 \
 ++batch_size_s=300 \
 ++hotwords="" \
-"++language=中文"
+++language=zh
