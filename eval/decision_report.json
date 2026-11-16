@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-05-18T15:32:16.401080",
+  "model": "FunAudioLLM/Fun-ASR-Nano-2512",
+  "latency_summary": {
+    "overall_rtf": 0.6849331977648496,
+    "e2e_latency_p50": 1.7419342705979943,
+    "e2e_latency_p90": 1.844206127524376,
+    "e2e_latency_p99": 2.034866900052875
+  },
+  "resource_summary": {
+    "model_size_mb": 2028.9,
+    "gpu_peak_mb": 3403.5,
+    "cpu_peak_mb": 5252.4
+  },
+  "quantization_summary": {
+    "baseline": {
+      "cer": 48.02,
+      "rtf": 0.6814,
+      "total_infer_sec": 176.5,
+      "total_audio_sec": 259.03,
+      "avg_latency_sec": 1.765,
+      "gpu_model_mb": 2191.6,
+      "gpu_peak_mb": 3442.8
+    }
+  }
+}

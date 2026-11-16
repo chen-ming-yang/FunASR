@@ -1,0 +1,19 @@
+{
+  "model": "FunAudioLLM/Fun-ASR-Nano-2512",
+  "device": "cuda:0",
+  "num_samples_profiled": 50,
+  "model_size_disk_mb": 2028.9,
+  "cpu_memory": {
+    "rss_before_load_mb": 602.6,
+    "rss_after_load_mb": 5187.0,
+    "rss_peak_during_infer_mb": 5252.4,
+    "model_load_delta_mb": 4584.4
+  },
+  "gpu_memory": {
+    "after_load_allocated_mb": 2191.6,
+    "after_load_reserved_mb": 2200.0,
+    "peak_allocated_mb": 3403.5,
+    "peak_reserved_mb": 3502.0,
+    "inference_peak_delta_mb": 1212.0
+  }
+}

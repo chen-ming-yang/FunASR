@@ -53,7 +53,7 @@ def load_ref(path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hyp", default="text_tn", help="Inference output file (key + hyp per line)")
+    parser.add_argument("--hyp", default="outputs/infer_results/1best_recog/text_tn", help="Inference output file (key + hyp per line)")
     parser.add_argument("--ref", default="dysar_data/test.jsonl", help="Reference JSONL with 'key' and 'target'")
     parser.add_argument("--per-utt", action="store_true", help="Also print per-utterance CER")
     args = parser.parse_args()
